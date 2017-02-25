@@ -1,107 +1,65 @@
 #!/usr/bin/env python
 # coding=utf-8
-import array
-import base64
-import hashlib
-import hmac
+
+import argparse
+import os
 import sys
+import ConfigParser
 
-from activationcode import ActivationCode
+from utils.token_generation import generate_mobilepass_token
 
-# I ported the KDF1 algorithm from the bouncycastle library that shipped with
-# the app as the python libraries that included this function seemed to be
-# returning different values.
-def KDF1(hash, secret, iv, start_position, key_length): #key should be passed by reference
-	counter_start = 0
-	counter = counter_start
+CONFIG_FILE = os.path.expanduser("~") + "/.mobilepasser.cfg"
 
-	digest_size = hash.digest_size
-	digests_required = (int) ((key_length + digest_size - 1) / digest_size)
-	digest_counter = 0
 
-	key = bytearray()
+parser = argparse.ArgumentParser(description='A reimplementation of the MobilePASS client in Python.')
+parser.add_argument('-k', '--activation-key', type = str,
+                    help = 'The string the MobilePass client generated.')
+parser.add_argument('-x', '--index', type = int, default = 0,
+                    help = 'The index of the token to generate.')
+parser.add_argument('-p', '--policy', type = str, default = '',
+                    help = 'Policy for the token.')
+parser.add_argument('-l', '--otp-length', type = int, default = 6,
+                    help = 'Length of the returned OTP.')
 
-	while True:
-		if digest_counter >= digests_required:
-			return key
+args = parser.parse_args()
+Config = ConfigParser.ConfigParser()
 
-		hash.update(secret)
+def read_config():
+    Config.read(CONFIG_FILE)
+    if not Config.has_section('MobilePASS') or \
+        not(Config.has_option('MobilePASS', 'activation_key') and \
+            Config.has_option('MobilePASS', 'index')):
+        raise ValueError('''Configuration file is missing required parameters.\nMake sure it looks something like this:\n
+            [MobilePASS]
+            activation_key="QVKYC-FM6KO-SY6F7-TR22W"
+            policy=""
+            index=0
+            otp_length=6
+            ''')
 
-		# In java the counter was being cast to a byte before being passed to the hash update
-		# function. Java uses narrowing primitive conversion for this type of casting which
-		# only preserves the last byte. So it needed to do some bit math to preserve the whole
-		# counter. This is what we're trying to replicate here.
-		# See: http://stackoverflow.com/questions/2458495/how-are-integers-casted-to-bytes-in-java
-		hash.update(bytes(chr((counter >> 24) & 0xff)))
-		hash.update(bytes(chr((counter >> 16) & 0xff)))
-		hash.update(bytes(chr((counter >> 8) & 0xff)))
-		hash.update(bytes(chr(counter & 0xff)))
+if args.activation_key == None and not os.path.exists(CONFIG_FILE):
+    raise RuntimeError('Must provide an activation key or create a config file. See --help for more information.')
 
-		if iv != "":
-			hash.update(iv)
+if args.activation_key == None and len(sys.argv) > 1:
+    raise ValueError('Can not provide arguments without specifying an activation key. See --help for more information.')
 
-		digest = hash.digest()
+if args.activation_key:
+    key = args.activation_key
+    index = args.index
+    policy = args.policy
+    length = args.otp_length
+else:
+    read_config()
+    key = Config.get('MobilePASS', 'activation_key')
+    index = Config.get('MobilePASS', 'index')
+    policy = Config.get('MobilePASS', 'policy')
+    length = Config.get('MobilePASS', 'otp_length')
 
-		if (key_length > digest_size):
-			key[start_position:start_position+digest_size] = digest[0:digest_size]
-			start_position += digest_size
-			key_length -= digest_size
-		else:
-			key[start_position:start_position+key_length] = digest[0:key_length]
+print generate_mobilepass_token(key or '', int(index or 0), policy or '', int(length))
 
-		counter += 1
-		digest_counter += 1
-
-def get_key(entropy, policy):
-	secret = entropy
-
-	if len(policy) != 0:
-		policy_bytes = policy.encode('utf_8');
-		secret += policy_bytes
-
-	hash = hashlib.new('sha256')
-
-	return KDF1(hash, secret, bytearray(), 0, 32)
-
-def long_to_byte_array(long_num):
-    """
-    helper function to convert a long number into a byte array
-    """
-    byte_array = array.array('B')
-    for i in reversed(range(0, 8)):
-        byte_array.insert(0, long_num & 0xff)
-        long_num >>= 8
-    return byte_array
-
-def truncated_value(h):
-    bytes = bytearray(h.decode("hex"))
-    offset = bytes[-1] & 0xf
-    v = (bytes[offset] & 0x7f) << 24 | (bytes[offset+1] & 0xff) << 16 | \
-            (bytes[offset+2] & 0xff) << 8 | (bytes[offset+3] & 0xff)
-    return v
-
-def generate_mobilepass_token(activation_key, index, policy=''):
-        '''
-        activation_key is the string the MobilePass client generated.
-
-        index is a 0-based index of the token to generate. The first
-        generated token is for index=0, the second for index=1, and
-        so on. It is the caller’s responsibility to keep track of the
-        current index.
-        '''
-        message = long_to_byte_array(index)
-
-        code = ActivationCode(activation_key)
-        entropy = code.getEntropy().tobytes()
-        key = get_key(entropy, policy)
-
-        h = hmac.new(key, message, hashlib.sha256).hexdigest()
-        h = truncated_value(h)
-        h = h % (10**6)
-        return '%0*d' % (6, h)
-
-if __name__ == '__main__':
-        key = "QVKYC-FM6KO-SY6F7-TR22W"
-        policy = ""
-        index = 0
-        print generate_mobilepass_token(key, index, policy)   # 374844
+# Increment the index and save to config if we are using the config file
+if len(sys.argv) == 1:
+    Config.set('MobilePASS', 'index', int(index) +1)
+    cfgfile = open(CONFIG_FILE, 'w')
+    Config.write(cfgfile)
+    cfgfile.close
