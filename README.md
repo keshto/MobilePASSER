@@ -31,4 +31,4 @@ optional arguments:
 
 Configuration
 -------------
-The configuration file is read form `~/mobilepasser.cfg`. An example config file can be found in the examples folder.
+The configuration file is read form `~/.mobilepasser.cfg`. An example config file can be found in the examples folder.
